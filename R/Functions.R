@@ -5,57 +5,67 @@
 ##################################################################################################################################
 ##################################################################################################################################
 
-get_density_input <- function(inputfile,binsize,cut=T,chr.match,cutoff=10){
-  #inputfile = input_be_line;binsize =1;cut = T;cutoff = 0; chr.match = "~/Documents/AIL/From.Yanjun/data/chr_id.match.txt"
+get_density_input <- function(inputfile,binsize,chr.ranks,cutoff=10, minsize=2000){
+  # compute the marker density on the input for Tiger
+  # NB : This function is only implemented for contigs larger that 2 Mb!
+  # takes:
+  #          inputfile = Tiger input file (e.g. path/to/sample.genotype)
+  #          binsize   = integer, size of the bins in basepairs for which the marker density will be computed.
+  #          chr.ranks = .tsv or dataframe with index, name and size in basepairs and sizerank. here we use the one created by stripes_2/scripts/make_contig_names.py
+  #          cutoff    = number of informative markers per bin that is considered acceptable.
+  # returns:
+  #          output.count =  ##TODO
 
-  if(!cut)
-    stop("This function is only implemened for contig larger that 2 Mb","\n")
+  ## load requirements
   if(!require(data.table))
     require(data.table)
   input <- fread(inputfile)
 
-  # update the W Z LGE
-  chr.match <- read.table(chr.match,header = T,sep = "\t",stringsAsFactors = F)
-  chr.match$Name <- gsub(pattern = "W",replacement = 34,chr.match$Name)
-  chr.match$Name <- gsub(pattern = "Z",replacement = 35,chr.match$Name)
-  chr.match$Name <- gsub(pattern = "LGE",replacement = 36,chr.match$Name)
-  chr.match$Name <- gsub(pattern = "MT",replacement = 37,chr.match$Name)
-  ## transfer back the input
+  ## check if chr.rank is filename or data.frame, if filename, load as dataframe.
+if(is.character(chr.ranks)){
+  chr.ranks <- fread(chr.ranks, sep="\t")
+  }
+  ## format chr.ranks
+  setnames(chr.ranks, old=c("V1","0","1","rank"), new=c("idx", "name","size","rank" ))
+  chr.ranks <- chr.ranks[order(chr.ranks$rank)]
+  chr.ranks <- data.frame(chr.ranks)
 
-  input$V1 <- chr.match$INSDC[match(input$V1,chr.match$Name)]
-  ##### update the input
-  chr.all <- chr.match$INSDC[chr.match$Size.Mb>2]
+
+
+  ## substitute chromosome names in input file with numeric rank
+  input$V1 <- chr.ranks$rank[match(input$V1,chr.ranks$name)]
+  ## filter input for chromosome minimum size
+  chr.all <- chr.ranks$rank[chr.ranks$size>minsize]
   input <- subset(input,subset = input$V1 %in% chr.all)
-  input$V1 <- as.numeric(chr.match$Name[match(input$V1,chr.match$INSDC)])
+
 
   ## calculate the number of mrker along the genome
   chr.num <- sort(unique(input$V1))
   out.put <- list()
 
-  for( i in 1:length(chr.num)){
+  for( i in 1:length(chr.num)){  ##for each chromosome
     chrom <- chr.num[i]
-    input.chr <- data.frame(subset(input,input$V1 %in% chrom))
-    bins <- seq(1,chr.match$Size.Mb.[as.numeric(chr.match$Name) == chrom],by=binsize)
-    index <- findInterval(x = input.chr$V2/1e6,vec = bins)
-    index.pos <- seq(0,length(bins)+1,by=1)*binsize
+    input.chr <- data.frame(subset(input,input$V1 %in% chrom))  # get all information on that chromosome from the input file / sample
+    bins <- seq(1,chr.ranks$size[as.numeric(chr.ranks$rank) == chrom],by=binsize)  # create bins from 1 to chromosome size, with size binsize
+    index <- findInterval(x = input.chr$V2,vec = bins)  # assign all sites to a bin
+    index.pos <- seq(0,length(bins)+1,by=1)*binsize  #
     names(index.pos) <- seq(0,length(index.pos)-1,by=1)
     out <- aggregate(x = index,by=list(index),FUN=length)
     density <- out$x
     names(density) <- index.pos[as.character(out$Group.1)]
     if(length(density) <3){
-      warning("two few windown")
+      warning("too few windows\n")
       dis <- ""
     }else{
       dis <- as.numeric(names(density)[seq(2,length(density),by = 1)]) - as.numeric(names(density)[seq(1,length(density)-1,by = 1)] )
 
     }
     ratio <- sum(density > cutoff)/length(bins)
-    #ratio <- sum(dis[dis>0.3])/chr.match$Size.Mb.[as.numeric(chr.match$Name) == chrom]
     out.put[[i]] <- list("density"=density,"gap"=dis,"coverage.chrom"=ratio)
   }
-  #names(out.put) <- chr.num
+  names(out.put) <- chr.num
 
-  names(out.put) <- chr.match$INSDC[match(chr.num,chr.match$Name)]
+  names(out.put) <- chr.ranks$name[match(chr.num,chr.ranks$name)]
   return(out.put)
 }
 get.info <- function(chroms,chroms.len,bin.size=1e6){
@@ -85,10 +95,10 @@ get.info <- function(chroms,chroms.len,bin.size=1e6){
   }
   return(list("num.bin" = num.bin,"index"=index,"loca"=loca,"loca.chr"=loca.chr,"chr.loca"=chr.loca))
 }
-wrap_get_density<- function(chr.match,test){
-  chr.match <- fread(chr.match)
-  chroms <- chr.match$INSDC
-  chroms.len <- chr.match$`Size(Mb)`*1e6
+wrap_get_density<- function(chr.ranks,test){
+  chr.ranks <- fread(chr.ranks)
+  chroms <- chr.ranks$name
+  chroms.len <- chr.ranks$size
   out.info <- get.info(chroms = chroms, chroms.len = chroms.len, bin.size = 1e6)
   output.count <- data.frame(array(0, dim = c(1, max(out.info$index$end))))
   colnames(output.count) <- 1:ncol(output.count)
@@ -109,6 +119,8 @@ wrap_get_density<- function(chr.match,test){
   #output.count[,which(output.count > 50)] <- 50
   return(output.count)
 }
+
+
 #####filter out these with less than 5 marker/mb
 ##################################################################################################################################
 ##################################################################################################################################
@@ -555,4 +567,3 @@ Export2rqtl <- function(genoFile,phenoFile,output.name=paste0("/Users/yanjunzan/
 
   #cat("file", paste0(output.name,  ".csv"),"generated","\n" )
 }
-
